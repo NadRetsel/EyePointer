@@ -7,13 +7,21 @@ mp_drawing = mp.solutions.drawing_utils
 mp_face_mesh = mp.solutions.face_mesh
 
 drawing_spec = mp_drawing.DrawingSpec(thickness = 1, circle_radius = 1)
-face_mesh = mp_face_mesh.FaceMesh(max_num_faces = 1, min_detection_confidence = 0.5, min_tracking_confidence = 0.5)
+face_mesh = mp_face_mesh.FaceMesh(max_num_faces = 1, refine_landmarks = True, min_detection_confidence = 0.5, min_tracking_confidence = 0.5)
+
+LEFT_EYE   = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398]
+LEFT_IRIS  = [474, 475, 476, 477]
+RIGHT_EYE  = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246]
+RIGHT_IRIS = [469, 470, 471, 472]
+
 
 def getFaceMesh(image):
     results = face_mesh.process(image)
 
     if not results.multi_face_landmarks:
         return (image, results)
+
+    image_h, image_w, image_c = image.shape
 
     # Draw the mesh
     for face_landmarks in results.multi_face_landmarks:
@@ -28,7 +36,7 @@ def getFaceMesh(image):
     return (image, results)
 
 
-def calculateFaceAngle(results, image):
+def getFaceAngles(image, results):
     image_h, image_w, image_c = image.shape
     face_3d = []
     face_2d = []
@@ -102,6 +110,29 @@ def calculateFaceAngle(results, image):
     return angles
 
 
+def getEyesLocation(image, results):
+    image_h, image_w, image_c = image.shape
+
+    for face_landmarks in results.multi_face_landmarks:
+
+        # Convert location of landmarks to pixel coordiantes
+        mesh_points = np.array([np.multiply([landmark.x, landmark.y], [image_w, image_h]).astype(int) for idx,landmark in enumerate(face_landmarks.landmark)])
+
+        # Get iris location
+        (l_iris_x,l_iris_y),l_iris_radius = cv2.minEnclosingCircle(mesh_points[LEFT_IRIS])
+        (r_iris_x,r_iris_y),r_iris_radius = cv2.minEnclosingCircle(mesh_points[RIGHT_IRIS])
+        l_iris_centre = (int(l_iris_x),int(l_iris_y))
+        r_iris_centre = (int(r_iris_x),int(r_iris_y))
+        cv2.circle(image,l_iris_centre,int(l_iris_radius),(0,255,0),2)
+        cv2.circle(image,r_iris_centre,int(r_iris_radius),(0,255,0),2)
+
+        # Get eye box
+        l_eye_x, l_eye_y, l_eye_w, l_eye_h = cv2.boundingRect(mesh_points[LEFT_EYE])
+        r_eye_x, r_eye_y, r_eye_w, r_eye_h = cv2.boundingRect(mesh_points[RIGHT_EYE])
+        cv2.rectangle(image,(l_eye_x, l_eye_y), (l_eye_x + l_eye_w, l_eye_y + l_eye_h), (0,255,0),2)
+        cv2.rectangle(image,(r_eye_x, r_eye_y), (r_eye_x + r_eye_w, r_eye_y + r_eye_h), (0,255,0),2)
+
+    return (image, results)
 
 
 def main():
@@ -120,7 +151,8 @@ def main():
         image, results = getFaceMesh(image)
 
         if results.multi_face_landmarks:
-            calculateFaceAngle(results, image)
+            getFaceAngles(image, results)
+            getEyesLocation(image, results)
 
 
         cTime = time.time()
