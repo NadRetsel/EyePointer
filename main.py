@@ -1,6 +1,7 @@
 import cv2
 import mediapipe as mp
 import numpy     as np
+import math
 import time
 
 mp_drawing = mp.solutions.drawing_utils
@@ -10,11 +11,19 @@ drawing_spec = mp_drawing.DrawingSpec(thickness = 1, circle_radius = 1)
 face_mesh = mp_face_mesh.FaceMesh(max_num_faces = 1, refine_landmarks = True, min_detection_confidence = 0.5, min_tracking_confidence = 0.5)
 
 LEFT_EYE   = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398]
-LEFT_IRIS  = [474, 475, 476, 477]
+LEFT_PUPIL = 473
+#LEFT_IRIS  = [474, 475, 476, 477]
+
 RIGHT_EYE  = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246]
-RIGHT_IRIS = [469, 470, 471, 472]
+RIGHT_PUPIL = 468
+#RIGHT_IRIS = [469, 470, 471, 472]
+
+l_closed = False
+r_closed = False
+b_closed = False
 
 
+# Returns the landmarks
 def getFaceMesh(image):
     results = face_mesh.process(image)
 
@@ -36,6 +45,7 @@ def getFaceMesh(image):
     return (image, results)
 
 
+# Return the angles the face is tilted by
 def getFaceAngles(image, results):
     image_h, image_w, image_c = image.shape
     face_3d = []
@@ -82,9 +92,9 @@ def getFaceAngles(image, results):
         x,y,z = np.array(angles) * 360
 
         # See where the user's head tilting
-        if y < -10:
+        if y > 10:
             text = "Looking Left"
-        elif y > 10:
+        elif y < -10:
             text = "Looking Right"
         elif x < -10:
             text = "Looking Down"
@@ -110,29 +120,102 @@ def getFaceAngles(image, results):
     return angles
 
 
+# Returns coordinates of eyes and pupils
 def getEyesLocation(image, results):
     image_h, image_w, image_c = image.shape
 
     for face_landmarks in results.multi_face_landmarks:
 
         # Convert location of landmarks to pixel coordiantes
-        mesh_points = np.array([np.multiply([landmark.x, landmark.y], [image_w, image_h]).astype(int) for idx,landmark in enumerate(face_landmarks.landmark)])
+        mesh_points = np.array([np.multiply([landmark.x, landmark.y], [image_w, image_h]).astype(int) for landmark in face_landmarks.landmark])
 
-        # Get iris location
-        (l_iris_x,l_iris_y),l_iris_radius = cv2.minEnclosingCircle(mesh_points[LEFT_IRIS])
-        (r_iris_x,r_iris_y),r_iris_radius = cv2.minEnclosingCircle(mesh_points[RIGHT_IRIS])
-        l_iris_centre = (int(l_iris_x),int(l_iris_y))
-        r_iris_centre = (int(r_iris_x),int(r_iris_y))
-        cv2.circle(image,l_iris_centre,int(l_iris_radius),(0,255,0),2)
-        cv2.circle(image,r_iris_centre,int(r_iris_radius),(0,255,0),2)
+        # Draw box around eyes
+        l_eye = cv2.minAreaRect(mesh_points[LEFT_EYE])
+        l_box = np.int0(cv2.boxPoints(l_eye))
+        cv2.drawContours(image, [l_box], 0, (0,255,0),2)
 
-        # Get eye box
-        l_eye_x, l_eye_y, l_eye_w, l_eye_h = cv2.boundingRect(mesh_points[LEFT_EYE])
-        r_eye_x, r_eye_y, r_eye_w, r_eye_h = cv2.boundingRect(mesh_points[RIGHT_EYE])
-        cv2.rectangle(image,(l_eye_x, l_eye_y), (l_eye_x + l_eye_w, l_eye_y + l_eye_h), (0,255,0),2)
-        cv2.rectangle(image,(r_eye_x, r_eye_y), (r_eye_x + r_eye_w, r_eye_y + r_eye_h), (0,255,0),2)
+        r_eye = cv2.minAreaRect(mesh_points[RIGHT_EYE])
+        r_box = np.int0(cv2.boxPoints(r_eye))
+        cv2.drawContours(image, [r_box], 0, (0,255,0),2)
 
-    return (image, results)
+        # Display centre of boxes + pupil
+        l_centre = (int(l_eye[0][0]), int(l_eye[0][1]))
+        cv2.circle(image, l_centre, 1, (0,255,255), 2)
+        cv2.circle(image, mesh_points[LEFT_PUPIL], 1, (255,0,0), 2)
+
+        r_centre = (int(r_eye[0][0]), int(r_eye[0][1]))
+        cv2.circle(image, r_centre, 1, (0,255,255), 2)
+        cv2.circle(image, mesh_points[RIGHT_PUPIL], 1, (255,0,0), 2)
+
+    return (l_eye, r_eye, [mesh_points[LEFT_PUPIL], mesh_points[RIGHT_PUPIL]])
+
+
+# Returns the horizontal and vertical distances of pupils from centre of the eyes
+def getPupilDists(l_eye, r_eye, pupils):
+
+    # Calcualtes the horizontal and vertical distance of pupils from the centre, taking into account angle of tilt
+    def calculatePupilDist(eye, pupil):
+        manhat = np.subtract(eye[0], pupil)
+
+        # Shift the range of the angles from [-90, 0), the range of minAreaRect, to [-45, 45)
+        angle = (eye[2] + 45) % 90 - 45
+
+        x_hor_component = manhat[0] * math.cos(angle)
+        x_ver_component = manhat[0] * math.sin(angle)
+
+        y_hor_component = manhat[1] * math.cos(angle)
+        y_ver_component = manhat[1] * math.sin(angle)
+
+        return( (x_hor_component + y_hor_component), (x_ver_component + y_ver_component))
+
+    l_hor, l_ver = calculateEyeDist(l_eye, pupils[0])
+    r_hor, r_ver = calculateEyeDist(r_eye, pupils[1])
+
+    return ((l_hor, l_ver), (r_hor, r_ver))
+
+
+# Calculate the width / height ratio of eyes to determine if a blink occurs
+def detectBlinks(l_eye, r_eye):
+    global l_closed
+    global r_closed
+    global b_closed
+
+    ratio_threshold = 7
+
+    l_width, l_height = max(l_eye[1]), min(l_eye[1])
+    r_width, r_height = max(r_eye[1]), min(r_eye[1])
+    l_ratio = l_width / l_height
+    r_ratio = r_width / r_height
+
+
+    if(not b_closed):
+        # Detect eyes closing
+        if(l_ratio >=  ratio_threshold and not l_closed):
+            l_closed = True
+
+        if(r_ratio >= ratio_threshold and not r_closed):
+            r_closed = True
+
+        if(l_closed and r_closed):
+            b_closed = True
+
+        # Detect eyes opening (only if both were not closed at the same time)
+        if(l_ratio <  ratio_threshold and l_closed):
+            l_closed = False
+            print("Left blink")
+        if(r_ratio <  ratio_threshold and r_closed):
+            r_closed = False
+            print("Right blink")
+
+    else:
+        # Detect when both eyes open to count as a blink
+        if(l_ratio <  ratio_threshold and l_closed):
+            l_closed = False
+        if(r_ratio <  ratio_threshold and r_closed):
+            r_closed = False
+        if(not l_closed and not r_closed):
+            b_closed = False
+
 
 
 def main():
@@ -147,12 +230,16 @@ def main():
         pTime = cTime
 
         _, image = cap.read()
-        image = cv2.cvtColor(cv2.flip(image,1), cv2.COLOR_BGR2RGB)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         image, results = getFaceMesh(image)
 
+        # If a face is detected
         if results.multi_face_landmarks:
-            getFaceAngles(image, results)
-            getEyesLocation(image, results)
+            angles = getFaceAngles(image, results)
+            l_eye, r_eye, pupils = getEyesLocation(image, results)
+            l_dist, r_dist = getEyeDists(l_eye, r_eye, pupils)
+
+            detectBlinks(l_eye, r_eye)
 
 
         cTime = time.time()
