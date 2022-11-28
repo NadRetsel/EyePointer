@@ -11,12 +11,12 @@ drawing_spec = mp_drawing.DrawingSpec(thickness = 1, circle_radius = 1)
 face_mesh = mp_face_mesh.FaceMesh(max_num_faces = 1, refine_landmarks = True, min_detection_confidence = 0.5, min_tracking_confidence = 0.5)
 
 LEFT_EYE   = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398]
+LEFT_IRIS  = [474, 475, 476, 477]
 LEFT_PUPIL = 473
-#LEFT_IRIS  = [474, 475, 476, 477]
 
 RIGHT_EYE  = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246]
+RIGHT_IRIS = [469, 470, 471, 472]
 RIGHT_PUPIL = 468
-#RIGHT_IRIS = [469, 470, 471, 472]
 
 l_closed = False
 r_closed = False
@@ -147,11 +147,23 @@ def getEyesLocation(image, results):
         cv2.circle(image, r_centre, 1, (0,255,255), 2)
         cv2.circle(image, mesh_points[RIGHT_PUPIL], 1, (255,0,0), 2)
 
-    return (l_eye, r_eye, [mesh_points[LEFT_PUPIL], mesh_points[RIGHT_PUPIL]])
+
+        # Draw iris cross
+        cv2.line(image, mesh_points[LEFT_IRIS[0]], mesh_points[LEFT_IRIS[2]], (255, 0, 0), 2)
+        cv2.line(image, mesh_points[LEFT_IRIS[1]], mesh_points[LEFT_IRIS[3]], (255, 0, 0), 2)
+
+        cv2.line(image, mesh_points[RIGHT_IRIS[0]], mesh_points[RIGHT_IRIS[2]], (255, 0, 0), 2)
+        cv2.line(image, mesh_points[RIGHT_IRIS[1]], mesh_points[RIGHT_IRIS[3]], (255, 0, 0), 2)
+
+        l_iris_radius = (np.linalg.norm(mesh_points[LEFT_IRIS[0]]-mesh_points[LEFT_IRIS[1]]) + np.linalg.norm(mesh_points[LEFT_IRIS[2]]-mesh_points[LEFT_IRIS[3]])) / 2
+        r_iris_radius = (np.linalg.norm(mesh_points[RIGHT_IRIS[0]]-mesh_points[RIGHT_IRIS[1]]) + np.linalg.norm(mesh_points[RIGHT_IRIS[2]]-mesh_points[RIGHT_IRIS[3]])) / 2
+
+    return ([l_eye, r_eye], [l_iris_radius, r_iris_radius], [mesh_points[LEFT_PUPIL], mesh_points[RIGHT_PUPIL]])
 
 
 # Returns the horizontal and vertical distances of pupils from centre of the eyes
-def getPupilDists(l_eye, r_eye, pupils):
+def getPupilDists(eyes, pupils):
+    l_eye, r_eye = eyes
 
     # Calcualtes the horizontal and vertical distance of pupils from the centre, taking into account angle of tilt
     def calculatePupilDist(eye, pupil):
@@ -168,14 +180,16 @@ def getPupilDists(l_eye, r_eye, pupils):
 
         return( (x_hor_component + y_hor_component), (x_ver_component + y_ver_component))
 
-    l_hor, l_ver = calculateEyeDist(l_eye, pupils[0])
-    r_hor, r_ver = calculateEyeDist(r_eye, pupils[1])
+    l_hor, l_ver = calculatePupilDist(l_eye, pupils[0])
+    r_hor, r_ver = calculatePupilDist(r_eye, pupils[1])
 
-    return ((l_hor, l_ver), (r_hor, r_ver))
+    return ([l_hor, l_ver], [r_hor, r_ver])
 
 
 # Calculate the width / height ratio of eyes to determine if a blink occurs
-def detectBlinks(l_eye, r_eye):
+def detectBlinks(eyes):
+    l_eye, r_eye = eyes
+
     global l_closed
     global r_closed
     global b_closed
@@ -236,10 +250,9 @@ def main():
         # If a face is detected
         if results.multi_face_landmarks:
             angles = getFaceAngles(image, results)
-            l_eye, r_eye, pupils = getEyesLocation(image, results)
-            l_dist, r_dist = getEyeDists(l_eye, r_eye, pupils)
-
-            detectBlinks(l_eye, r_eye)
+            eyes, irises_diam, pupils = getEyesLocation(image, results)
+            l_pupil_dist, r_pupil_dist = getPupilDists(eyes, pupils)
+            detectBlinks(eyes)
 
 
         cTime = time.time()
